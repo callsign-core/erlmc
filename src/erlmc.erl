@@ -158,12 +158,18 @@ flush(Expiration) when is_integer(Expiration) ->
     multi_call({flush, Expiration}).
     
 quit() ->
+	Result =
 	[begin
 		{Key, [
 			{'EXIT',{shutdown,{gen_server,call,[Pid,quit,?TIMEOUT]}}} == 
 				(catch gen_server:call(Pid, quit, ?TIMEOUT)) || Pid <- Pids]}
-	 end || {Key, Pids} <- unique_connections()].
-    
+	 end || {Key, Pids} <- unique_connections()],
+	case whereis(?MODULE) of
+		undefined -> ok;
+		_ -> erlang:send(?MODULE, {quit})
+	end,
+	Result.
+
 version() ->
     multi_call(version).
 
@@ -191,21 +197,26 @@ init(Parent, CacheServers) ->
 	register(erlmc, self()),
 	ets:new(erlmc_continuum, [ordered_set, protected, named_table]),
 	ets:new(erlmc_connections, [bag, protected, named_table]),
-    
-    %% Continuum = [{uint(), {Host, Port}}]
-	[add_server_to_continuum(Host, Port) || {Host, Port, _} <- CacheServers],
-        
-    %% Connections = [{{Host,Port}, ConnPid}]
-	[begin
-		[start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)]
-	 end || {Host, Port, ConnPoolSize} <- CacheServers],
-        
-	proc_lib:init_ack(Parent, {ok, self()}),
-	
-	loop().
-	
+	try
+	     %% Continuum = [{uint(), {Host, Port}}]
+		[add_server_to_continuum(Host, Port) || {Host, Port, _} <- CacheServers],
+
+	     %% Connections = [{{Host,Port}, ConnPid}]
+		[begin
+			 [start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)]
+		 end || {Host, Port, ConnPoolSize} <- CacheServers],
+
+		proc_lib:init_ack(Parent, {ok, self()}),
+
+		loop()
+	after
+		ets:delete(erlmc_connections),
+		ets:delete(erlmc_continuum),
+		unregister(erlmc)
+	end.
+
 loop() ->
-	receive
+	case receive
 		{add_server, Host, Port, ConnPoolSize} ->
 			add_server_to_continuum(Host, Port),
             [start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)];
@@ -240,9 +251,13 @@ loop() ->
 					end;
 				_ -> 
 					ok
-			end
-	end,
-	loop().
+			end;
+		{quit} ->
+			stop_loop
+	end of
+		stop_loop -> ok;
+		_ -> loop()
+	end.
 	
 start_connection(Host, Port) ->
 	case erlmc_conn:start_link([Host, Port]) of
