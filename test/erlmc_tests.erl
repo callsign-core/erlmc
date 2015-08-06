@@ -80,4 +80,4 @@ add_remove_server_t(_Setup) ->
 
 set_and_get_timeout_t(_Setup) ->
     erlmc:set("Hello", <<"World">>),
-	[?_assertMatch({'EXIT', {timeout, _}}, (catch erlmc:get("Hello", 0)))].
+	[?_assertMatch({error, timeout}, erlmc:get("Hello", 0))].

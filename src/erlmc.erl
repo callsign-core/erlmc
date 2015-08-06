@@ -232,7 +232,7 @@ host_port_call(Host, Port, Msg) ->
 call(Pid, Msg, Timeout) ->
     try gen_server:call(Pid, Msg, Timeout) of
         Response -> Response
-    catch error:{timeout, _} ->
+    catch exit:{timeout, _} ->
         {error, timeout}
     end.
 %%--------------------------------------------------------------------
