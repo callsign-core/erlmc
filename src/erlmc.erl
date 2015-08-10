@@ -228,13 +228,14 @@ host_port_call(Host, Port, Msg) ->
     Pid = unique_connection(Host, Port),
     gen_server:call(Pid, Msg, ?TIMEOUT).
 
-%% Todo why crash here? When we can error out. The caller can decide to crash or not
 call(Pid, Msg, Timeout) ->
-    try gen_server:call(Pid, Msg, Timeout) of
-        Response -> Response
-    catch exit:{timeout, _} ->
-        {error, timeout}
-    end.
+	try gen_server:call(Pid, Msg, Timeout) of
+		{error, Error} -> exit({erlmc, Error});
+		Resp -> Resp
+    catch exit:{timeout, Reason} ->
+        exit({erlmc, {timeout, Reason}})
+	end.
+
 %%--------------------------------------------------------------------
 %%% Stateful loop
 %%--------------------------------------------------------------------	
