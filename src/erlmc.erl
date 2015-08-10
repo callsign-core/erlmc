@@ -72,12 +72,18 @@
 -include("erlmc.hrl").
 
 -define(TIMEOUT, 5000).
+-define(CONNECT_TIMEOUT, 5000).
+
+-record(state, {connect_timeout}).
 
 %%--------------------------------------------------------------------
 %%% API
 %%--------------------------------------------------------------------
-start_link(CacheServers) when is_list(CacheServers) ->
-	gen_server:start_link({local, ?MODULE}, ?MODULE, [CacheServers], []).
+start_link(CacheServers) ->
+    start_link(CacheServers, ?CONNECT_TIMEOUT).
+
+start_link(CacheServers, ConnectTimeout) when is_list(CacheServers) ->
+	gen_server:start_link({local, ?MODULE}, ?MODULE, [CacheServers, ConnectTimeout], []).
 
 add_server(Host, Port, PoolSize) ->
     gen_server:call(?MODULE, {add_server, Host, Port, PoolSize}).
@@ -241,7 +247,7 @@ call(Pid, Msg, Timeout) ->
 %%--------------------------------------------------------------------	
 
 %% TODO Turn this into a gen_server. No need to reinvent the wheel here.
-init([CacheServers]) ->
+init([CacheServers, ConnectTimeout]) ->
     %% Trap exit?
 	process_flag(trap_exit, true),
 	ets:new(erlmc_continuum, [ordered_set, protected, named_table]),
@@ -252,24 +258,24 @@ init([CacheServers]) ->
 
     %% Connections = [{{Host,Port}, ConnPid}]
 	[begin
-		[start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)]
+		[start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize)]
 	 end || {Host, Port, ConnPoolSize} <- CacheServers],
 
-    {ok, undefined}.
+    {ok, #state{connect_timeout=ConnectTimeout}}.
 
-handle_call({add_server, Host, Port, ConnPoolSize}, _From, State) ->
+handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
     add_server_to_continuum(Host, Port),
-    [start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)],
+    [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize)],
     {reply, ok, State};
 
-handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, State) ->
+handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
     % adding to continuum is idempotent
     add_server_to_continuum(Host, Port),
     % add only necessary connections to reach pool size
     LiveConnections = revalidate_connections(Host, Port),
     Reply = if
         LiveConnections < ConnPoolSize ->
-            [start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)];
+            [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)];
         true -> ok
     end,
     {reply, Reply, State};
@@ -283,8 +289,8 @@ handle_call({has_server, Host, Port}, _From, State) ->
     Reply = is_server_in_continuum(Host, Port),
     {reply, Reply, State};
 
-handle_call({add_connection, Host, Port}, _From, State) ->
-    start_connection(Host, Port),
+handle_call({add_connection, Host, Port}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
+    start_connection(Host, Port, ConnectTimeout),
     {reply, ok, State};
 
 handle_call({remove_connection, Host, Port}, _From, State) ->
@@ -296,13 +302,13 @@ handle_call({remove_connection, Host, Port}, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, Err}, State) ->
+handle_info({'EXIT', Pid, Err}, #state{connect_timeout=ConnectTimeout}=State) ->
     case ets:match(erlmc_connections, {'$1', Pid}) of
     	[[{Host, Port}]] ->
     		ets:delete_object(erlmc_connections, {{Host, Port}, Pid}),
     		case Err of
     			shutdown -> ok;
-    			_ -> start_connection(Host, Port)
+    			_ -> start_connection(Host, Port, ConnectTimeout)
     		end;
     	_ ->
     		ok
@@ -318,8 +324,8 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-start_connection(Host, Port) ->
-	case erlmc_conn:start_link([Host, Port]) of
+start_connection(Host, Port, ConnectTimeout) ->
+	case erlmc_conn:start_link([Host, Port], ConnectTimeout) of
 		{ok, Pid} -> ets:insert(erlmc_connections, {{Host, Port}, Pid});
 		_ -> ok
 	end.
