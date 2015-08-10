@@ -30,12 +30,15 @@
 -include("erlmc.hrl").
 
 %% gen_server callbacks
--export([start_link/1, init/1, handle_call/3, handle_cast/2, 
+-export([start_link/1, start_link/2, init/1, handle_call/3, handle_cast/2, 
 	     handle_info/2, terminate/2, code_change/3]).
 
 %% API functions
 start_link([Host, Port]) ->
-	gen_server:start_link(?MODULE, [Host, Port], []).
+    start_link([Host, Port], 1000).
+
+start_link([Host, Port], ConnectTimeout) ->
+	gen_server:start_link(?MODULE, [Host, Port, ConnectTimeout], []).
 
 %%====================================================================
 %% gen_server callbacks
@@ -49,11 +52,11 @@ start_link([Host, Port]) ->
 %% Description: Initiates the server
 %% @hidden
 %%--------------------------------------------------------------------
-init([Host, Port]) ->
-	case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]) of
+init([Host, Port, ConnectTimeout]) ->
+	case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}], ConnectTimeout) of
         {ok, Socket} -> 
 			{ok, Socket};
-        Error -> 
+        Error ->
 			exit(Error)
     end.
 
