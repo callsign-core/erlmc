@@ -55,10 +55,8 @@ start_link([Host, Port], ConnectTimeout) ->
 init([Host, Port, ConnectTimeout]) ->
 	case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}], ConnectTimeout) of
         {ok, Socket} -> 
-            io:format("SOCKET, ~p~n", [Socket]),
 			{ok, Socket};
         Error ->
-            io:format("ERROR: ~p~n", [Error]),
 			exit(Error)
     end.
 
