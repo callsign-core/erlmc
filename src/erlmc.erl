@@ -29,6 +29,7 @@
 -behaviour(gen_server).
 
 -export([start_link/1,
+         start_link/2,
 		 add_server/3,
          remove_server/2,
          refresh_server/3,
@@ -82,7 +83,7 @@
 start_link(CacheServers) ->
     start_link(CacheServers, ?CONNECT_TIMEOUT).
 
-start_link(CacheServers, ConnectTimeout) when is_list(CacheServers) ->
+start_link(CacheServers, ConnectTimeout) when is_list(CacheServers), is_integer(ConnectTimeout) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE, [CacheServers, ConnectTimeout], []).
 
 add_server(Host, Port, PoolSize) ->
