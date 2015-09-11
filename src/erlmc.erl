@@ -276,7 +276,8 @@ handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_ti
     LiveConnections = revalidate_connections(Host, Port),
     Reply = if
         LiveConnections < ConnPoolSize ->
-            [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)];
+            [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)],
+            ok;
         true -> ok
     end,
     {reply, Reply, State};
@@ -327,7 +328,9 @@ code_change(_OldVsn, State, _Extra) ->
 
 start_connection(Host, Port, ConnectTimeout) ->
 	case erlmc_conn:start_link([Host, Port], ConnectTimeout) of
-		{ok, Pid} -> ets:insert(erlmc_connections, {{Host, Port}, Pid});
+		{ok, Pid} ->
+            true = ets:insert(erlmc_connections, {{Host, Port}, Pid}),
+            ok;
 		_ -> ok
 	end.
 
