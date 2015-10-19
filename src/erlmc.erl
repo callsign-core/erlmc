@@ -68,6 +68,7 @@
          flush/0,
          flush/1,
          quit/0,
+         restart/0,
 		 version/0]).
 
 -include("erlmc.hrl").
@@ -218,7 +219,11 @@ quit(Timeout) ->
 			{'EXIT',{shutdown,{gen_server,call,[Pid,quit,Timeout]}}} ==
 				(catch gen_server:call(Pid, quit, Timeout)) || Pid <- Pids]}
 	 end || {Key, Pids} <- unique_connections()].
-    
+
+%% Quit forcefully and restart from a clean slate
+restart() ->
+    ok = gen_server:call(?MODULE, restart).
+
 version() ->
     multi_call(version).
 
@@ -251,8 +256,7 @@ call(Pid, Msg, Timeout) ->
 init([CacheServers, ConnectTimeout]) ->
     %% Trap exit?
 	process_flag(trap_exit, true),
-	ets:new(erlmc_continuum, [ordered_set, protected, named_table]),
-	ets:new(erlmc_connections, [bag, protected, named_table]),
+	setup_ets(),
 
     %% Continuum = [{uint(), {Host, Port}}]
 	[add_server_to_continuum(Host, Port) || {Host, Port, _} <- CacheServers],
@@ -281,6 +285,11 @@ handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_ti
         true -> ok
     end,
     {reply, Reply, State};
+
+handle_call(restart, _From, State) ->
+    [[exit(Pid, kill) || Pid <- Pids] || {_Key, Pids} <- unique_connections()],
+    setup_ets(),
+    {reply, ok, State};
 
 handle_call({remove_server, Host, Port}, _From, State) ->
     [(catch gen_server:call(Pid, quit, ?TIMEOUT)) || [Pid] <- ets:match(erlmc_connections, {{Host, Port}, '$1'})],
@@ -337,6 +346,15 @@ start_connection(Host, Port, ConnectTimeout) ->
 revalidate_connections(Host, Port) ->
     [(catch gen_server:call(Pid, version, ?TIMEOUT)) || [Pid] <- ets:match(erlmc_connections, {{Host, Port}, '$1'})],
     length(ets:match(erlmc_connections, {{Host, Port}, '$1'})).
+
+setup_ets() ->
+    %% Clear out any pre-existing data so we can start clean
+    [case ets:info(T) of
+         undefined -> ok;
+         _ -> ets:delete(T)
+     end || T <- [erlmc_connections, erlmc_continuum]],
+    ets:new(erlmc_continuum, [ordered_set, protected, named_table]),
+    ets:new(erlmc_connections, [bag, protected, named_table]).
 
 %%--------------------------------------------------------------------
 %%% Internal functions
