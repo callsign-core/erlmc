@@ -309,5 +309,16 @@ recv_bytes(_, 0) -> <<>>;
 recv_bytes(#state{socket=Socket, recv_timeout=RecvTimeout}, NumBytes) ->
     case gen_tcp:recv(Socket, NumBytes, RecvTimeout) of
         {ok, Bin} -> Bin;
-        Err -> Err
+        {error, Reason} = Err ->
+            %% If we encounter ANY error when receiving data on the socket, close the
+            %% socket and kill this connection process.  The thinking behind this is:
+            %% let's say we hit a read timeout but the socket stays open.  What happens
+            %% to the next request?  Is it possible it could read the previous request's
+            %% response?  The memcached protocol doesn't seem to include any sort of
+            %% "request id," so I'm not sure.  I *am* sure that I don't want the wrong
+            %% response...ever!  Best way to ensure that is to close the socket down.
+            error_logger:error_msg("erlmc_conn is closing and exiting to prevent stale read, reason: ~p~n", [Reason]),
+            gen_tcp:close(Socket),
+            exit(Reason),
+            Err
     end.
