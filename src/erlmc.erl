@@ -30,6 +30,7 @@
 
 -export([start_link/1,
          start_link/2,
+         start_link/4,
 		 add_server/3,
          remove_server/2,
          refresh_server/3,
@@ -75,8 +76,10 @@
 
 -define(TIMEOUT, 5000).
 -define(CONNECT_TIMEOUT, 5000).
+-define(DEFAULT_SEND_TIMEOUT, 5000).
+-define(DEFAULT_RECV_TIMEOUT, 5000).
 
--record(state, {connect_timeout}).
+-record(state, {connect_timeout, send_timeout, recv_timeout}).
 
 %%--------------------------------------------------------------------
 %%% API
@@ -85,7 +88,14 @@ start_link(CacheServers) ->
     start_link(CacheServers, ?CONNECT_TIMEOUT).
 
 start_link(CacheServers, ConnectTimeout) when is_list(CacheServers), is_integer(ConnectTimeout) ->
-	gen_server:start_link({local, ?MODULE}, ?MODULE, [CacheServers, ConnectTimeout], []).
+    start_link(CacheServers, ConnectTimeout, ?DEFAULT_SEND_TIMEOUT, ?DEFAULT_RECV_TIMEOUT).
+
+start_link(CacheServers, ConnectTimeout, SendTimeout, RecvTimeout) when is_list(CacheServers),
+                                                                        is_integer(ConnectTimeout),
+                                                                        is_integer(SendTimeout),
+                                                                        is_integer(RecvTimeout) ->
+	gen_server:start_link({local, ?MODULE}, ?MODULE,
+                          [CacheServers, ConnectTimeout, SendTimeout, RecvTimeout], []).
 
 add_server(Host, Port, PoolSize) ->
     gen_server:call(?MODULE, {add_server, Host, Port, PoolSize}).
@@ -253,7 +263,7 @@ call(Pid, Msg, Timeout) ->
 %%--------------------------------------------------------------------	
 
 %% TODO Turn this into a gen_server. No need to reinvent the wheel here.
-init([CacheServers, ConnectTimeout]) ->
+init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout]) ->
     %% Trap exit?
 	process_flag(trap_exit, true),
 	setup_ets(),
@@ -263,24 +273,28 @@ init([CacheServers, ConnectTimeout]) ->
 
     %% Connections = [{{Host,Port}, ConnPid}]
 	[begin
-		[start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize)]
+		[start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize)]
 	 end || {Host, Port, ConnPoolSize} <- CacheServers],
 
-    {ok, #state{connect_timeout=ConnectTimeout}}.
+    {ok, #state{connect_timeout=ConnectTimeout, send_timeout=SendTimeout, recv_timeout=RecvTimeout}}.
 
-handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
+handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout,
+                                                                  send_timeout=SendTimeout,
+                                                                  recv_timeout=RecvTimeout}=State) ->
     add_server_to_continuum(Host, Port),
-    [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize)],
+    [start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize)],
     {reply, ok, State};
 
-handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
+handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout,
+                                                                      send_timeout=SendTimeout,
+                                                                      recv_timeout=RecvTimeout}=State) ->
     % adding to continuum is idempotent
     add_server_to_continuum(Host, Port),
     % add only necessary connections to reach pool size
     LiveConnections = revalidate_connections(Host, Port),
     Reply = if
         LiveConnections < ConnPoolSize ->
-            [start_connection(Host, Port, ConnectTimeout) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)],
+            [start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize - LiveConnections)],
             ok;
         true -> ok
     end,
@@ -300,8 +314,10 @@ handle_call({has_server, Host, Port}, _From, State) ->
     Reply = is_server_in_continuum(Host, Port),
     {reply, Reply, State};
 
-handle_call({add_connection, Host, Port}, _From, #state{connect_timeout=ConnectTimeout}=State) ->
-    start_connection(Host, Port, ConnectTimeout),
+handle_call({add_connection, Host, Port}, _From, #state{connect_timeout=ConnectTimeout,
+                                                        send_timeout=SendTimeout,
+                                                        recv_timeout=RecvTimeout}=State) ->
+    start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout),
     {reply, ok, State};
 
 handle_call({remove_connection, Host, Port}, _From, State) ->
@@ -313,13 +329,15 @@ handle_call({remove_connection, Host, Port}, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, Err}, #state{connect_timeout=ConnectTimeout}=State) ->
+handle_info({'EXIT', Pid, Err}, #state{connect_timeout=ConnectTimeout,
+                                       send_timeout=SendTimeout,
+                                       recv_timeout=RecvTimeout}=State) ->
     case ets:match(erlmc_connections, {'$1', Pid}) of
     	[[{Host, Port}]] ->
     		ets:delete_object(erlmc_connections, {{Host, Port}, Pid}),
     		case Err of
     			shutdown -> ok;
-    			_ -> start_connection(Host, Port, ConnectTimeout)
+    			_ -> start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout)
     		end;
     	_ ->
     		ok
@@ -335,8 +353,8 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-start_connection(Host, Port, ConnectTimeout) ->
-	case erlmc_conn:start_link([Host, Port], ConnectTimeout) of
+start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) ->
+	case erlmc_conn:start_link([Host, Port], ConnectTimeout, SendTimeout, RecvTimeout) of
 		{ok, Pid} ->
             true = ets:insert(erlmc_connections, {{Host, Port}, Pid}),
             ok;
