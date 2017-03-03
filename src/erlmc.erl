@@ -460,6 +460,7 @@ map_key(Key) when is_list(Key) ->
     try
         unique_connection(Host, Port)
     catch exit:{erlmc, {connection_not_found, {_Host, _Post}}} ->
+        error_logger:warning_msg("Connection is missing from the pool, trying to reconnect: ~s:~p", [Host, Port]),
         refresh_server(Host, Port),
         unique_connection(Host, Port)
     end.
