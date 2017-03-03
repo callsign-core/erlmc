@@ -269,7 +269,7 @@ call(Pid, Msg, Timeout) ->
 %%--------------------------------------------------------------------	
 
 %% TODO Turn this into a gen_server. No need to reinvent the wheel here.
-init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout]) ->
+init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout, DefaultPoolSize]) ->
     %% Trap exit?
 	process_flag(trap_exit, true),
 	setup_ets(),
@@ -282,7 +282,7 @@ init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout]) ->
 		[start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize)]
 	 end || {Host, Port, ConnPoolSize} <- CacheServers],
 
-    {ok, #state{connect_timeout=ConnectTimeout, send_timeout=SendTimeout, recv_timeout=RecvTimeout}}.
+    {ok, #state{connect_timeout=ConnectTimeout, send_timeout=SendTimeout, recv_timeout=RecvTimeout, pool_size=DefaultPoolSize}}.
 
 handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout,
                                                                   send_timeout=SendTimeout,
