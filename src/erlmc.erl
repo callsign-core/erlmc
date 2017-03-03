@@ -81,7 +81,7 @@
 -define(DEFAULT_RECV_TIMEOUT, 5000).
 -define(DEFAULT_POOL_SIZE, 10).
 
--record(state, {connect_timeout, send_timeout, recv_timeout, pool_size=10}).
+-record(state, {connect_timeout, send_timeout, recv_timeout, pool_size}).
 
 %%--------------------------------------------------------------------
 %%% API
