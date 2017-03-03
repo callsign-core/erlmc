@@ -30,9 +30,10 @@
 
 -export([start_link/1,
          start_link/2,
-         start_link/4,
+         start_link/5,
 		 add_server/3,
          remove_server/2,
+         refresh_server/2,
          refresh_server/3,
          has_server/2,
          add_connection/2,
@@ -78,8 +79,9 @@
 -define(CONNECT_TIMEOUT, 5000).
 -define(DEFAULT_SEND_TIMEOUT, 5000).
 -define(DEFAULT_RECV_TIMEOUT, 5000).
+-define(DEFAULT_POOL_SIZE, 10).
 
--record(state, {connect_timeout, send_timeout, recv_timeout}).
+-record(state, {connect_timeout, send_timeout, recv_timeout, pool_size}).
 
 %%--------------------------------------------------------------------
 %%% API
@@ -88,17 +90,21 @@ start_link(CacheServers) ->
     start_link(CacheServers, ?CONNECT_TIMEOUT).
 
 start_link(CacheServers, ConnectTimeout) when is_list(CacheServers), is_integer(ConnectTimeout) ->
-    start_link(CacheServers, ConnectTimeout, ?DEFAULT_SEND_TIMEOUT, ?DEFAULT_RECV_TIMEOUT).
+    start_link(CacheServers, ConnectTimeout, ?DEFAULT_SEND_TIMEOUT, ?DEFAULT_RECV_TIMEOUT, ?DEFAULT_POOL_SIZE).
 
-start_link(CacheServers, ConnectTimeout, SendTimeout, RecvTimeout) when is_list(CacheServers),
+start_link(CacheServers, ConnectTimeout, SendTimeout, RecvTimeout, DefaultPoolSize) when is_list(CacheServers),
                                                                         is_integer(ConnectTimeout),
                                                                         is_integer(SendTimeout),
-                                                                        is_integer(RecvTimeout) ->
+                                                                        is_integer(RecvTimeout),
+                                                                        is_integer(DefaultPoolSize) ->
 	gen_server:start_link({local, ?MODULE}, ?MODULE,
-                          [CacheServers, ConnectTimeout, SendTimeout, RecvTimeout], []).
+                          [CacheServers, ConnectTimeout, SendTimeout, RecvTimeout, DefaultPoolSize], []).
 
 add_server(Host, Port, PoolSize) ->
     gen_server:call(?MODULE, {add_server, Host, Port, PoolSize}).
+
+refresh_server(Host, Port) ->
+    gen_server:call(?MODULE, {refresh_server, Host, Port}).
 
 refresh_server(Host, Port, PoolSize) ->
     gen_server:call(?MODULE, {refresh_server, Host, Port, PoolSize}).
@@ -242,7 +248,7 @@ multi_call(Msg) ->
 
 multi_call(Msg, Timeout) ->
 	[begin
-		Pid = lists:nth(random:uniform(length(Pids)), Pids),
+		Pid = lists:nth(rand:uniform(length(Pids)), Pids),
 		{{Host, Port}, gen_server:call(Pid, Msg, Timeout)}
 	end || {{Host, Port}, Pids} <- unique_connections()].
 
@@ -263,7 +269,7 @@ call(Pid, Msg, Timeout) ->
 %%--------------------------------------------------------------------	
 
 %% TODO Turn this into a gen_server. No need to reinvent the wheel here.
-init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout]) ->
+init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout, DefaultPoolSize]) ->
     %% Trap exit?
 	process_flag(trap_exit, true),
 	setup_ets(),
@@ -276,7 +282,7 @@ init([CacheServers, ConnectTimeout, SendTimeout, RecvTimeout]) ->
 		[start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize)]
 	 end || {Host, Port, ConnPoolSize} <- CacheServers],
 
-    {ok, #state{connect_timeout=ConnectTimeout, send_timeout=SendTimeout, recv_timeout=RecvTimeout}}.
+    {ok, #state{connect_timeout=ConnectTimeout, send_timeout=SendTimeout, recv_timeout=RecvTimeout, pool_size=DefaultPoolSize}}.
 
 handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout,
                                                                   send_timeout=SendTimeout,
@@ -284,6 +290,9 @@ handle_call({add_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeou
     add_server_to_continuum(Host, Port),
     [start_connection(Host, Port, ConnectTimeout, SendTimeout, RecvTimeout) || _ <- lists:seq(1, ConnPoolSize)],
     {reply, ok, State};
+
+handle_call({refresh_server, Host, Port}, From, #state{pool_size=DefaultPoolSize}=State) ->
+    handle_call({refresh_server, Host, Port, DefaultPoolSize}, From, State);
 
 handle_call({refresh_server, Host, Port, ConnPoolSize}, _From, #state{connect_timeout=ConnectTimeout,
                                                                       send_timeout=SendTimeout,
@@ -418,7 +427,7 @@ unique_connection(Host, Port) ->
     case ets:lookup(erlmc_connections, {Host, Port}) of
         [] -> exit({erlmc, {connection_not_found, {Host, Port}}});
         Pids ->
-            {_, Pid} = lists:nth(random:uniform(length(Pids)), Pids),
+            {_, Pid} = lists:nth(rand:uniform(length(Pids)), Pids),
             Pid
     end.
 
@@ -448,7 +457,13 @@ map_key(Key) when is_list(Key) ->
 				end;
 			Value -> Value
 		end,
-	unique_connection(Host, Port).
+    try
+        unique_connection(Host, Port)
+    catch exit:{erlmc, {connection_not_found, {_Host, _Post}}} ->
+        error_logger:warning_msg("Connection is missing from the pool, trying to reconnect: ~s:~p", [Host, Port]),
+        refresh_server(Host, Port),
+        unique_connection(Host, Port)
+    end.
 
 %% @todo: use sorting algorithm to find next largest
 find_next_largest(_, '$end_of_table') -> 
