@@ -248,7 +248,7 @@ multi_call(Msg) ->
 
 multi_call(Msg, Timeout) ->
 	[begin
-		Pid = lists:nth(random:uniform(length(Pids)), Pids),
+		Pid = lists:nth(rand:uniform(length(Pids)), Pids),
 		{{Host, Port}, gen_server:call(Pid, Msg, Timeout)}
 	end || {{Host, Port}, Pids} <- unique_connections()].
 
@@ -427,7 +427,7 @@ unique_connection(Host, Port) ->
     case ets:lookup(erlmc_connections, {Host, Port}) of
         [] -> exit({erlmc, {connection_not_found, {Host, Port}}});
         Pids ->
-            {_, Pid} = lists:nth(random:uniform(length(Pids)), Pids),
+            {_, Pid} = lists:nth(rand:uniform(length(Pids)), Pids),
             Pid
     end.
 
